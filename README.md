@@ -88,8 +88,8 @@ git clone https://github.com/KuznetsovKarazin/lut-kan.git
 pip install -r requirements.txt
 ```
 
-Servono inoltre, nella root del repo, due file dal lavoro precedente:
-`utils.py` (modelli, preprocessing, metriche) e il dataset TON_IoT (vedi
+Servono inoltre, nella root del repo, un file dal lavoro precedente:
+Il dataset TON_IoT (vedi
 `data/README.md`). Il file `preprocessing/section_310_...py` è incluso.
 
 ## Uso
