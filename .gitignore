@@ -1,0 +1,18 @@
+# dati (non ridistribuire: scaricare da fonte ufficiale)
+*.csv
+!results/*.csv
+train_test_network.csv
+
+# repo esterno clonato
+lut-kan/
+
+# file utente dal lavoro precedente
+#utils.py
+
+# output generati
+kan_ids_layer.h
+*.pyc
+__pycache__/
+.venv/
+venv/
+.DS_Store
