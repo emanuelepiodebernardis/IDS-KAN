@@ -21,7 +21,8 @@ e sulle stesse board del lavoro precedente.
 Il punto chiave **non** è battere i gradient-boosted tree sull'accuratezza
 (non li batte: su dati tabulari restano davanti). È dimostrare che una KAN
 classificatore può essere quantizzata in LUT e deployata su microcontrollore
-con una catena verificata end-to-end.
+con una catena verificata end-to-end, cosa che `lut-kan` da solo non copre
+perché lavora su regressione, non classificazione.
 
 ## Risultati (TON_IoT, task binario)
 
@@ -57,6 +58,29 @@ sole LUT coincide con quella in virgola mobile al **99.95%** sul test set.
 
 I 5.4 KB entrano negli 8 KB di SRAM dell'Arduino Mega.
 
+### Latenza on-device e inferenza interamente intera
+
+La prima versione del runtime usava aritmetica float (dequantizzazione
+`ymin + scale*q` per ogni edge). Su microcontrollori senza FPU questo
+e' costoso. Seguendo questa osservazione, il runtime e' stato riscritto
+in tre stadi: float, intero (tabella int16 pre-scalata, accumulo int32,
+decisione per confronto con soglia, niente sigmoid), e fully-integer
+(input pre-quantizzati in Q16.16, zero float nel ciclo di inferenza).
+
+Latenza media misurata in simulazione su Wokwi (40 vettori di test,
+accuratezza 97.5% invariata in tutti gli stadi):
+
+| Board | float | intero | fully-integer | speedup |
+|---|---|---|---|---|
+| Arduino Mega 2560 | 2851 µs | 680 µs | 357 µs | 8.0× |
+| ESP32-C3 | 1665 µs | 207 µs | 38 µs | 44× |
+
+L'eliminazione del float restituisce all'ESP32-C3 il vantaggio di clock
+sull'aritmetica intera: il rapporto Mega/ESP32 passa da 1.7× (float) a
+9.4× (fully-integer), coerente con la differenza tra un AVR a 16 MHz e un
+RISC-V a 160 MHz. La decisione binaria non richiede sigmoid: basta il
+segno del logit intero accumulato.
+
 ## Struttura del repository
 
 ```
@@ -88,9 +112,10 @@ git clone https://github.com/KuznetsovKarazin/lut-kan.git
 pip install -r requirements.txt
 ```
 
-Servono inoltre, nella root del repo, un file dal lavoro precedente:
-Il dataset TON_IoT (vedi
-`data/README.md`). Il file `preprocessing/section_310_...py` è incluso.
+Servono inoltre, nella root del repo, il dataset TON_IoT (vedi
+`data/README.md` per le istruzioni di download). I file `utils.py`
+(modelli, preprocessing e metriche, dal lavoro precedente) e
+`preprocessing/section_310_...py` sono inclusi nel repo.
 
 ## Uso
 
@@ -111,13 +136,16 @@ python scripts/export_lut.py --csv train_test_network.csv
 
 ## Stato e lavoro futuro
 
-Attuale: KAN single-layer (gradiente esatto), task binario, catena
-KAN → LUT → header C verificata in simulazione.
+Fatto: KAN single-layer (gradiente esatto), task binario, catena
+KAN → LUT → header C verificata; runtime in tre stadi (float, intero,
+fully-integer) con benchmark di latenza in simulazione su due board.
 
-Prossimi passi: flash su hardware fisico e misura di latenza/SRAM on-board
-(stile lavoro precedente); KAN multi-layer addestrata in PyTorch/PyKAN per
-recuperare parte del gap con gli ensemble; estensione al task multiclass;
-variante a B-spline.
+In corso: KAN multi-layer addestrata in PyTorch per il task multiclass
+(il single-layer additivo non basta a separare 10 classi sulle 10
+feature unificate; il multi-layer recupera gran parte del divario).
+
+Prossimi passi: flash su hardware fisico reale; export LUT multi-strato
+per il deployment del modello multiclass; variante a B-spline.
 
 ## Crediti e licenza
 
