@@ -6,13 +6,22 @@ train_test_network.csv
 # repo esterno clonato
 lut-kan/
 
-# file utente dal lavoro precedente
-#utils.py
-
-# output generati
-kan_ids_layer.h
+# output Python
 *.pyc
 __pycache__/
 .venv/
 venv/
 .DS_Store
+
+# file temporanei/generati nella ROOT (gli header buoni stanno in mcu/ e results/)
+/kan_ids_layer.h
+/kan_ids_layer_int.h
+/kan_ids_mc_int.h
+/kan_ml_layer1.h
+/kan_ml_layer2.h
+/kan_ml_tanh.h
+/test_vectors_tmp.h
+
+# documento di lavoro interno (non pubblicare)
+PUNTO_SITUAZIONE.md
+PUBLISHING.md
