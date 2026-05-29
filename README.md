@@ -24,6 +24,8 @@ classificatore può essere quantizzata in LUT e deployata su microcontrollore
 con una catena verificata end-to-end, cosa che `lut-kan` da solo non copre
 perché lavora su regressione, non classificazione.
 
+---
+
 ## Risultati (TON_IoT, task binario)
 
 Confronto sullo **spazio unificato a 10 feature** (deployabile su MCU). I
@@ -34,7 +36,7 @@ LightGBM raggiunge F1 = 0.9992.
 | Modello | F1 | ROC-AUC | Note |
 |---|---|---|---|
 | LightGBM | 0.984 | 0.987 | gradient boosting |
-| Random Forest | 0.984 | 0.987 | gradient boosting |
+| Random Forest | 0.984 | 0.987 | ensemble |
 | XGBoost | 0.984 | 0.987 | gradient boosting |
 | **KAN Chebyshev** | **0.969** | **0.969** | **questo lavoro, 10 edge** |
 | Logistic Regression | 0.963 | 0.940 | lineare |
@@ -43,11 +45,7 @@ LightGBM raggiunge F1 = 0.9992.
 La KAN single-layer supera i baseline lineari e ad albero, resta sotto gli
 ensemble. Recall ≈ 0.98 (pochi attacchi mancati, errore desiderabile in un IDS).
 
-### Deployment
-
-La KAN addestrata viene quantizzata in LUT (uint8, segment-wise) riusando
-`build_lut_for_edges` di `lut-kan`. La decisione binaria ricostruita dalle
-sole LUT coincide con quella in virgola mobile al **99.95%** sul test set.
+### Deployment binario
 
 | Metrica | Valore |
 |---|---|
@@ -58,49 +56,27 @@ sole LUT coincide con quella in virgola mobile al **99.95%** sul test set.
 
 I 5.4 KB entrano negli 8 KB di SRAM dell'Arduino Mega.
 
-### Latenza on-device e inferenza interamente intera
+### Latenza on-device — task binario
 
-La prima versione del runtime usava aritmetica float (dequantizzazione
-`ymin + scale*q` per ogni edge). Su microcontrollori senza FPU questo
-e' costoso. Seguendo questa osservazione, il runtime e' stato riscritto
-in tre stadi: float, intero (tabella int16 pre-scalata, accumulo int32,
-decisione per confronto con soglia, niente sigmoid), e fully-integer
-(input pre-quantizzati in Q16.16, zero float nel ciclo di inferenza).
-
-Latenza media misurata in simulazione su Wokwi (40 vettori di test,
-accuratezza 97.5% invariata in tutti gli stadi):
+Latenza media misurata in simulazione su Wokwi (40 vettori, accuratezza 97.5%):
 
 | Board | float | intero | fully-integer | speedup |
 |---|---|---|---|---|
 | Arduino Mega 2560 | 2851 µs | 680 µs | 357 µs | 8.0× |
 | ESP32-C3 | 1665 µs | 207 µs | 38 µs | 44× |
 
-L'eliminazione del float restituisce all'ESP32-C3 il vantaggio di clock
-sull'aritmetica intera: il rapporto Mega/ESP32 passa da 1.7× (float) a
-9.4× (fully-integer), coerente con la differenza tra un AVR a 16 MHz e un
-RISC-V a 160 MHz. La decisione binaria non richiede sigmoid: basta il
-segno del logit intero accumulato.
+---
 
-## Risultati (TON_IoT, task multiclass a 10 classi)
+## Risultati (TON_IoT, task multiclass — 10 classi)
 
-Il task multiclass distingue 10 categorie (normal + 9 tipi di attacco).
-Lo studio sulle feature mostra che 10 feature grezze selezionate per mutual
-information sono il punto ottimale (oltre, l'accuratezza non sale). Con un
-preprocessing robusto (log1p sulle feature asimmetriche + scaling), si
-confrontano tre varianti di KAN, tutte deployate su ESP32-C3 in aritmetica
-intera pura e validate in simulazione su Wokwi.
+Il task multiclass distingue 10 categorie: `normal` + 9 tipi di attacco
+(`backdoor`, `ddos`, `dos`, `injection`, `mitm`, `password`, `ransomware`,
+`scanning`, `xss`). Le 10 feature selezionate per mutual information sono il
+punto ottimale (oltre, l'accuratezza non sale).
 
-| Modello | macro-F1 | edge | LUT | latenza ESP32 | accur. on-device |
-|---|---|---|---|---|---|
-| KAN single-layer | 0.86 | 100 | 100 KB | 118 µs | 90% |
-| KAN multi-layer (forward only) | 0.92 | 320 | 320 KB | 691 µs | 95% (38/40) |
-| KAN multi-layer (end-to-end, preprocessing on-chip) | 0.92 | 320 | 320+148 KB | 6149 µs | 95% (38/40) |
+### Confronto modelli multiclass
 
-Confronto leale con i modelli del lavoro precedente, sulle stesse 10 feature
-grezze e stesso split (ogni modello col preprocessing ottimale per la sua
-famiglia — i tree sono invarianti alle trasformazioni monotone):
-
-| Modello | macro-F1 |
+| Modello | Macro-F1 |
 |---|---|
 | Random Forest | 0.968 |
 | LightGBM / XGBoost | 0.965 |
@@ -109,13 +85,50 @@ famiglia — i tree sono invarianti alle trasformazioni monotone):
 | Decision Tree | 0.793 |
 | Logistic Regression | 0.214 |
 
-Come nel binario, la KAN è competitiva ma non supera i gradient boosting.
-Il contributo è il deployment: il multiclass multi-layer porta su MCU una
-KAN a due strati (Chebyshev → tanh → Chebyshev) interamente quantizzata in
-LUT, con il tanh tabulato. La quantizzazione a due strati è verificata non
-degradare l'accuratezza (macro-F1 int 0.916 vs float 0.918), e i logit del
-firmware C coincidono al bit con il modello Python. Il multiclass è
-ESP32-only (la LUT supera gli 8 KB del Mega).
+### Deployment multiclass su ESP32-C3
+
+| Variante | Macro-F1 | Edge | LUT | Latenza ESP32 | Acc. on-device |
+|---|---|---|---|---|---|
+| KAN single-layer | 0.86 | 100 | 100 KB | 118 µs | 90% (36/40) |
+| KAN multi-layer — forward only | 0.92 | 320 | 320 KB | 691 µs | 95% (38/40) |
+| KAN multi-layer — **end-to-end** (preprocessing on-chip) | 0.92 | 320 | 320+148 KB | 6149 µs | 95% (38/40) |
+
+### Valutazione su dataset completo (211 043 sample)
+
+Il modello multi-layer è stato valutato su **tutti i 211 043 sample** del
+dataset TON_IoT originale (il modello è addestrato su 48 000 sample,
+preprocessing fittato solo sul training, pipeline riproducibile con
+`random_state=42`).
+
+| Metrica | 12k test set | **211k full dataset** |
+|---|---|---|
+| Accuracy | 0.9623 | **0.9644** (203 533/211 043) |
+| Macro-F1 | 0.9118 | **0.9177** |
+| Weighted-F1 | — | **0.9663** |
+
+**Risultati per classe (211k sample):**
+
+| Classe | Support | Precision | Recall | F1 |
+|---|---|---|---|---|
+| backdoor | 20 000 | 1.00 | 1.00 | **1.00** |
+| ransomware | 20 000 | 1.00 | 1.00 | **1.00** |
+| normal | 50 000 | 0.99 | 0.98 | **0.99** |
+| password | 20 000 | 1.00 | 0.98 | **0.99** |
+| scanning | 20 000 | 0.98 | 0.99 | **0.99** |
+| dos | 20 000 | 0.99 | 0.97 | 0.98 |
+| ddos | 20 000 | 0.95 | 0.93 | 0.94 |
+| xss | 20 000 | 0.91 | 0.91 | 0.91 |
+| injection | 20 000 | 0.90 | 0.89 | 0.90 |
+| **mitm** | **1 043** | 0.34 | 0.88 | **0.49** |
+
+> `mitm` è fortemente sbilanciato (1 043 sample = 0.5% del dataset):
+> recall accettabile (0.88) ma precision bassa (0.34) per scarsità di esempi
+> nel training. Macro-F1 escludendo mitm: **0.9652**.
+
+**Principali confusioni:** xss ↔ injection (~6%), ddos → mitm (1.7%),
+dos → mitm (1.2%). Classi intrisecamente simili a livello di traffico di rete.
+
+---
 
 ## Struttura del repository
 
@@ -123,49 +136,52 @@ ESP32-only (la LUT supera gli 8 KB del Mega).
 kan-ids/
 ├── README.md
 ├── requirements.txt
-├── utils.py                    modelli, preprocessing, metriche (da iot-audit)
+├── utils.py                     modelli, preprocessing, metriche (da iot-audit)
 ├── src/
-│   ├── kan_chebyshev.py            KAN Chebyshev binaria (training BCE, NumPy)
-│   ├── kan_chebyshev_multiclass.py KAN Chebyshev multiclass (softmax)
-│   ├── kan_bspline.py              variante a base B-spline (confronto basi)
-│   ├── kan_torch.py                KAN multi-layer (PyTorch, autograd)
-│   └── kan_multilayer_numpy.py     replica NumPy del forward multi-layer
+│   ├── kan_chebyshev.py             KAN Chebyshev binaria (training BCE, NumPy)
+│   ├── kan_chebyshev_multiclass.py  KAN Chebyshev multiclass (softmax)
+│   ├── kan_bspline.py               variante a base B-spline (confronto basi)
+│   ├── kan_torch.py                 KAN multi-layer (PyTorch, autograd)
+│   └── kan_multilayer_numpy.py      replica NumPy del forward multi-layer
 ├── scripts/
-│   ├── compare_models.py           confronto binario: 5 modelli + KAN
+│   ├── compare_models.py            confronto binario: 5 modelli + KAN
 │   ├── compare_models_multiclass.py confronto multiclass
-│   ├── unified_comparison.py       confronto leale su base condivisa
-│   ├── feature_curve.py            studio accuratezza vs numero feature
-│   ├── basis_comparison.py         Chebyshev vs B-spline (acc + quantizzazione)
-│   ├── preproc_x_model.py          effetto preprocessing x modello
-│   ├── export_lut.py               export LUT binario (float)
-│   ├── export_lut_int.py           export LUT binario integer-only
+│   ├── unified_comparison.py        confronto leale su base condivisa
+│   ├── feature_curve.py             studio accuratezza vs numero feature
+│   ├── basis_comparison.py          Chebyshev vs B-spline (acc + quantizzazione)
+│   ├── preproc_x_model.py           effetto preprocessing x modello
+│   ├── export_lut.py                export LUT binario (float)
+│   ├── export_lut_int.py            export LUT binario integer-only
 │   ├── export_lut_int_multiclass.py export LUT multiclass single-layer
-│   ├── export_ml_int.py            export multi-layer (2 LUT + tanh) per firmware
-│   ├── ml_stage2_layer1_tanh.py    quantizzazione multi-layer: layer1 + tanh
-│   └── ml_stage3_full.py           quantizzazione multi-layer: forward completo
+│   ├── export_ml_int.py             export multi-layer (2 LUT + tanh) per firmware
+│   ├── ml_stage2_layer1_tanh.py     quantizzazione multi-layer: layer1 + tanh
+│   ├── ml_stage3_full.py            quantizzazione multi-layer: forward completo
+│   └── passo5_eval.py               pipeline end-to-end riproducibile (Passo 5)
 ├── preprocessing/
 │   └── section_310_unified_feature_engineering.py   (da iot-audit)
 ├── mcu/
-│   ├── main_kan.cpp                firmware base (legge l'header C)
-│   ├── main_kan_wokwi*.cpp         firmware binario (float / int / fully-int)
-│   ├── main_kan_mc_wokwi.cpp       firmware multiclass single-layer
-│   ├── main_kan_ml_wokwi.cpp       firmware multiclass multi-layer
-│   ├── kan_ids_*.h                 header LUT (generati)
-│   ├── kan_ml_*.h                  header LUT multi-layer (generati)
-│   ├── test_vectors*.h             vettori di test (generati)
-│   └── WOKWI_GUIDE*.md             guide alla simulazione
+│   ├── main_kan.cpp                 firmware base (legge l'header C)
+│   ├── main_kan_wokwi*.cpp          firmware binario (float / int / fully-int)
+│   ├── main_kan_mc_wokwi.cpp        firmware multiclass single-layer
+│   ├── main_kan_ml_wokwi.cpp        firmware multiclass multi-layer (forward only)
+│   ├── kan_ids_*.h                  header LUT binario (generati)
+│   ├── kan_ml_*.h                   header LUT multi-layer (generati)
+│   ├── test_vectors*.h              vettori di test (generati)
+│   └── WOKWI_GUIDE*.md              guide alla simulazione Wokwi
 ├── mcu_e2e/
-│   ├── main_kan_e2e_wokwi.cpp   firmware ESP32-C3 end-to-end (Passo 5)
-│   ├── main_harness_12k.cpp     harness host (valutazione su 12k sample)
-│   ├── kan_ml_prep.h            knot QT (10×1000 double) + PREP_REFS
-│   ├── test_e2e_12k.bin         12k sample binari (feature grezze + label)
-│   ├── test_vectors_e2e.h       40 sanity vector in feature grezze
-│   ├── WOKWI_E2E_GUIDE.md       istruzioni per Wokwi (e2e)
-│   └── scripts/passo5_eval.py   pipeline Python riproducibile (Passo 5)
-├── results/                    CSV dei risultati + header di esempio
+│   ├── main_kan_e2e_wokwi.cpp       firmware ESP32-C3 end-to-end (preprocessing on-chip)
+│   ├── main_harness_12k.cpp         harness host C++ (valutazione su 12k sample)
+│   ├── kan_ml_prep.h                knot QT (10×1000 double) + PREP_REFS
+│   ├── test_e2e_12k.bin             12k sample binari (feature grezze + label)
+│   ├── test_vectors_e2e.h           40 sanity vector in feature grezze
+│   └── WOKWI_E2E_GUIDE.md           guida Wokwi end-to-end
+├── results/
+│   └── full_dataset_eval.md         valutazione su 211k sample (report completo)
 └── data/
-    └── README.md               istruzioni per scaricare TON_IoT
+    └── README.md                    istruzioni per scaricare TON_IoT
 ```
+
+---
 
 ## Setup
 
@@ -176,73 +192,67 @@ git clone https://github.com/KuznetsovKarazin/lut-kan.git
 pip install -r requirements.txt
 ```
 
-Servono inoltre, nella root del repo, il dataset TON_IoT (vedi
-`data/README.md` per le istruzioni di download). I file `utils.py`
-(modelli, preprocessing e metriche, dal lavoro precedente) e
-`preprocessing/section_310_...py` sono inclusi nel repo.
+Serve inoltre il dataset TON_IoT nella root del repo
+(vedi `data/README.md` per le istruzioni di download).
+
+---
 
 ## Uso
 
-Confronto dei modelli (riproduce i risultati del lavoro precedente sulle
-95 feature e colloca la KAN sulle 10 feature):
-
+**Confronto modelli binario:**
 ```bash
 python scripts/compare_models.py --csv train_test_network.csv
 # test rapido: aggiungi --sample 40000
 ```
 
-Export LUT e verifica della catena di deployment:
-
+**Export LUT e verifica deployment:**
 ```bash
 python scripts/export_lut.py --csv train_test_network.csv
-# genera kan_ids_layer.h e verifica la coincidenza delle decisioni
 ```
 
-Multiclass (export integer single-layer e multi-layer):
-
+**Multiclass — export integer:**
 ```bash
-# single-layer: 100 edge, header per il firmware mcu/main_kan_mc_wokwi.cpp
+# single-layer
 python scripts/export_lut_int_multiclass.py --csv train_test_network.csv
 
-# multi-layer: genera i 2 layer LUT + tanh per mcu/main_kan_ml_wokwi.cpp
+# multi-layer (genera kan_ml_layer1.h, kan_ml_layer2.h, kan_ml_tanh.h)
 python scripts/export_ml_int.py
 ```
 
-Pipeline end-to-end (Passo 5, preprocessing on-chip):
-
+**Pipeline end-to-end con preprocessing on-chip:**
 ```bash
-# Rigenera preprocessing header, test set e harness, poi compila e valuta:
 python scripts/passo5_eval.py
 cd mcu_e2e && g++ -O2 -o harness_12k main_harness_12k.cpp -lm -I.. -I../mcu
 ./harness_12k test_e2e_12k.bin
-# Atteso: Macro-F1: 0.9118  Accuracy: 0.9623
+# Atteso: Macro-F1: 0.9118  Accuracy: 0.9623  (12k sample)
 ```
+
+---
 
 ## Stato e lavoro futuro
 
-Fatto: tre classificatori KAN deployati end-to-end su ESP32-C3 in aritmetica
-intera pura, tutti verificati Python→C:
-- binario single-layer (97.5%, fino a 38 µs, anche su Arduino Mega);
-- multiclass single-layer (90% on-device, 118 µs);
-- multiclass multi-layer (95% on-device, 691 µs, macro-F1 ~0.92).
+**Completato:**
+- KAN binario single-layer: F1=0.969, 38 µs su ESP32-C3, verificato Python→C
+- KAN multiclass single-layer: Macro-F1=0.86, 118 µs su ESP32-C3
+- KAN multiclass multi-layer — forward only: Macro-F1=0.92, 691 µs su ESP32-C3
+- KAN multiclass multi-layer — **end-to-end con preprocessing on-chip**:
+  - Macro-F1=0.9118 su 12k sample (harness host C++)
+  - Macro-F1=0.9177 su 211k sample (full dataset, riproducibile con seed=42)
+  - Accuracy=0.9644 su 211k sample
+  - Firmware ESP32-C3 verificato su Wokwi: 95.0% (38/40), latenza media 6149 µs
 
-**Passo 5 (completato)**: preprocessing on-chip verificato end-to-end.
-L'harness host C++ su 12 000 sample di test raggiunge macro-F1 = **0.9118**
-(identico al riferimento Python) dopo aver risolto una differenza di 1 ULP
-tra `log1p` di glibc e i knot generati da numpy nella binary search del QT
-bidirezionale. Il firmware `main_kan_e2e_wokwi.cpp` (ESP32-C3) esegue la
-catena completa raw→predizione e raggiunge 95.0% sui 40 sanity vector.
-Latenza misurata su Wokwi (ESP32-C3): media **6149 µs**, min 3586 µs, max 9069 µs.
-L'overhead del preprocessing QT bidirezionale (in double) è ~5458 µs rispetto
-al solo forward (691 µs); possibile ottimizzazione futura in fixed-point.
+**Note tecniche rilevanti:**
+- Bug risolto: differenza di 1 ULP tra `log1p` di glibc e knot generati da numpy
+  nella binary search del QuantileTransformer bidirezionale. Fix: tolleranza
+  `INTERP_EPS = 1e-14` nel confronto della binary search.
+- La latenza e2e (6149 µs) è dominata dal preprocessing in `double` (QT
+  bidirezionale + Acklam norm.ppf); il solo forward vale 691 µs.
 
-Studi a supporto: curva accuratezza/numero-feature, confronto basi
-(Chebyshev vs B-spline), effetto del preprocessing, confronto leale fra
-modelli sulla stessa base.
+**Prossimi passi:** flash su hardware fisico reale; ottimizzazione del
+preprocessing in fixed-point per ridurre la latenza e2e; variante B-spline
+per ridurre il footprint LUT.
 
-Prossimi passi: flash su hardware fisico reale; ottimizzazione del footprint
-del multi-layer (variante B-spline, che quantizza piu' densamente, o L
-ridotto).
+---
 
 ## Crediti e licenza
 
