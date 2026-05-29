@@ -93,7 +93,8 @@ intera pura e validate in simulazione su Wokwi.
 | Modello | macro-F1 | edge | LUT | latenza ESP32 | accur. on-device |
 |---|---|---|---|---|---|
 | KAN single-layer | 0.86 | 100 | 100 KB | 118 µs | 90% |
-| KAN multi-layer | 0.92 | 320 | 320 KB | 691 µs | 95% |
+| KAN multi-layer (forward only) | 0.92 | 320 | 320 KB | 691 µs | 95% (38/40) |
+| KAN multi-layer (end-to-end, preprocessing on-chip) | 0.92 | 320 | 320+148 KB | 6149 µs | 95% (38/40) |
 
 Confronto leale con i modelli del lavoro precedente, sulle stesse 10 feature
 grezze e stesso split (ogni modello col preprocessing ottimale per la sua
@@ -153,6 +154,14 @@ kan-ids/
 │   ├── kan_ml_*.h                  header LUT multi-layer (generati)
 │   ├── test_vectors*.h             vettori di test (generati)
 │   └── WOKWI_GUIDE*.md             guide alla simulazione
+├── mcu_e2e/
+│   ├── main_kan_e2e_wokwi.cpp   firmware ESP32-C3 end-to-end (Passo 5)
+│   ├── main_harness_12k.cpp     harness host (valutazione su 12k sample)
+│   ├── kan_ml_prep.h            knot QT (10×1000 double) + PREP_REFS
+│   ├── test_e2e_12k.bin         12k sample binari (feature grezze + label)
+│   ├── test_vectors_e2e.h       40 sanity vector in feature grezze
+│   ├── WOKWI_E2E_GUIDE.md       istruzioni per Wokwi (e2e)
+│   └── scripts/passo5_eval.py   pipeline Python riproducibile (Passo 5)
 ├── results/                    CSV dei risultati + header di esempio
 └── data/
     └── README.md               istruzioni per scaricare TON_IoT
@@ -199,6 +208,16 @@ python scripts/export_lut_int_multiclass.py --csv train_test_network.csv
 python scripts/export_ml_int.py
 ```
 
+Pipeline end-to-end (Passo 5, preprocessing on-chip):
+
+```bash
+# Rigenera preprocessing header, test set e harness, poi compila e valuta:
+python scripts/passo5_eval.py
+cd mcu_e2e && g++ -O2 -o harness_12k main_harness_12k.cpp -lm -I.. -I../mcu
+./harness_12k test_e2e_12k.bin
+# Atteso: Macro-F1: 0.9118  Accuracy: 0.9623
+```
+
 ## Stato e lavoro futuro
 
 Fatto: tre classificatori KAN deployati end-to-end su ESP32-C3 in aritmetica
@@ -206,13 +225,24 @@ intera pura, tutti verificati Python→C:
 - binario single-layer (97.5%, fino a 38 µs, anche su Arduino Mega);
 - multiclass single-layer (90% on-device, 118 µs);
 - multiclass multi-layer (95% on-device, 691 µs, macro-F1 ~0.92).
+
+**Passo 5 (completato)**: preprocessing on-chip verificato end-to-end.
+L'harness host C++ su 12 000 sample di test raggiunge macro-F1 = **0.9118**
+(identico al riferimento Python) dopo aver risolto una differenza di 1 ULP
+tra `log1p` di glibc e i knot generati da numpy nella binary search del QT
+bidirezionale. Il firmware `main_kan_e2e_wokwi.cpp` (ESP32-C3) esegue la
+catena completa raw→predizione e raggiunge 95.0% sui 40 sanity vector.
+Latenza misurata su Wokwi (ESP32-C3): media **6149 µs**, min 3586 µs, max 9069 µs.
+L'overhead del preprocessing QT bidirezionale (in double) è ~5458 µs rispetto
+al solo forward (691 µs); possibile ottimizzazione futura in fixed-point.
+
 Studi a supporto: curva accuratezza/numero-feature, confronto basi
 (Chebyshev vs B-spline), effetto del preprocessing, confronto leale fra
 modelli sulla stessa base.
 
 Prossimi passi: flash su hardware fisico reale; ottimizzazione del footprint
 del multi-layer (variante B-spline, che quantizza piu' densamente, o L
-ridotto); replica del preprocessing non-lineare direttamente su MCU.
+ridotto).
 
 ## Crediti e licenza
 
